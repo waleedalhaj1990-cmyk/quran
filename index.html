@@ -265,42 +265,90 @@
             text-align: justify;
         }
 
-        /* ✅ أنماط المساعد اللفظي */
-        .ayah-text.word-by-word {
+        /* ✅ تحسينات عرض الكلمات */
+        .ayah-text.word-highlight {
             font-size: 1.15rem;
             line-height: 2.2;
             letter-spacing: 0.02rem;
         }
 
         .word {
-            display: inline-block;
-            padding: 0.1rem 0.3rem;
-            margin: 0.1rem;
-            border-radius: 6px;
+            display: inline;
+            padding: 0.1rem 0.2rem;
+            margin: 0.05rem;
+            border-radius: 4px;
             transition: all 0.3s ease;
         }
 
-        .word.current {
-            background: rgba(34, 197, 94, 0.25);
-            border: 2px solid var(--accent);
-            font-weight: 600;
-        }
-
-        .word.correct {
-            background: rgba(34, 197, 94, 0.15);
-            color: var(--accent-light);
-        }
-
         .word.error {
-            background: rgba(239, 68, 68, 0.25);
+            background: rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+            font-weight: 700;
+            padding: 0.2rem 0.4rem;
             border: 2px solid var(--danger);
-            animation: shake 0.4s;
+            animation: shake 0.5s;
         }
 
         @keyframes shake {
             0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-5px); }
-            75% { transform: translateX(5px); }
+            25% { transform: translateX(-4px); }
+            75% { transform: translateX(4px); }
+        }
+
+        /* ✅ مربع الخطأ */
+        .error-box {
+            margin-top: 0.5rem;
+            padding: 0.6rem;
+            background: rgba(239, 68, 68, 0.15);
+            border: 2px solid var(--danger);
+            border-radius: 10px;
+            display: none;
+            animation: slideDown 0.3s ease;
+        }
+
+        .error-box.active {
+            display: block;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .error-box-title {
+            font-size: 0.75rem;
+            color: var(--text-sub);
+            margin-bottom: 0.3rem;
+        }
+
+        .error-comparison {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            font-size: 1.1rem;
+        }
+
+        .error-wrong {
+            color: #fca5a5;
+            text-decoration: line-through;
+            flex: 1;
+        }
+
+        .error-arrow {
+            color: var(--accent-yellow);
+            font-size: 1.3rem;
+        }
+
+        .error-correct {
+            color: var(--accent-light);
+            font-weight: 700;
+            flex: 1;
         }
 
         .stats-box {
@@ -406,11 +454,21 @@
         </div>
 
         <div id="recognizedBox" class="recognized-text-box">
-            <div style="font-size:0.7rem;color:#9ca3af;margin-bottom:0.2rem">🎙️ النص المُتعرَّف:</div>
+            <div style="font-size:0.7rem;color:#9ca3af;margin-bottom:0.2rem">🎙️ ما تقوله:</div>
             <div id="recognizedText">جارِ الاستماع...</div>
         </div>
 
-        <!-- ✅ إحصائيات المساعد اللفظي -->
+        <!-- ✅ مربع الخطأ -->
+        <div id="errorBox" class="error-box">
+            <div class="error-box-title">❌ خطأ في النطق:</div>
+            <div class="error-comparison">
+                <div class="error-wrong" id="errorWrong">-</div>
+                <div class="error-arrow">→</div>
+                <div class="error-correct" id="errorCorrect">-</div>
+            </div>
+        </div>
+
+        <!-- ✅ إحصائيات المساعد -->
         <div id="statsBox" class="stats-box">
             <div class="stat-item">
                 <span id="correctWords" class="stat-value" style="color: var(--accent);">0</span>
@@ -591,6 +649,9 @@ const ayahTextBox = document.getElementById("ayahText");
 const modeBadge = document.getElementById("modeBadge");
 const recognizedBox = document.getElementById("recognizedBox");
 const recognizedText = document.getElementById("recognizedText");
+const errorBox = document.getElementById("errorBox");
+const errorWrong = document.getElementById("errorWrong");
+const errorCorrect = document.getElementById("errorCorrect");
 const statsBox = document.getElementById("statsBox");
 const correctWordsEl = document.getElementById("correctWords");
 const errorWordsEl = document.getElementById("errorWords");
@@ -607,16 +668,16 @@ let countdownTimer = null;
 let countdownSeconds = 0;
 let currentAudio = null;
 
-// ✅ متغيرات المساعد اللفظي
+// ✅ متغيرات المساعد اللفظي الجديد
 let assistantMode = false;
 let currentAyahWords = [];
-let currentWordIndex = 0;
+let spokenWords = [];
 let correctWords = 0;
-let errorWords = 0;
+let errorWordsCount = 0;
 let speechSynthesis = window.speechSynthesis;
 let arabicVoice = null;
+let isCorrectingError = false;
 
-// ✅ تهيئة الصوت العربي
 function initArabicVoice() {
     const voices = speechSynthesis.getVoices();
     arabicVoice = voices.find(v => v.lang.startsWith('ar')) || voices[0];
@@ -698,22 +759,23 @@ function calculateSimilarity(text1, text2) {
     return Math.max(score1, score2);
 }
 
-// ✅ مقارنة كلمة واحدة
-function compareWord(spoken, expected) {
-    const norm1 = normalizeArabic(spoken);
-    const norm2 = normalizeArabic(expected);
+// ✅ إيجاد الكلمة الخاطئة
+function findErrorWord(spokenText, correctText) {
+    const spoken = splitWords(normalizeArabic(spokenText));
+    const correct = splitWords(normalizeArabic(correctText));
     
-    if (norm1 === norm2) return 1.0;
-    
-    const words1 = norm1.split(/\s+/);
-    const words2 = norm2.split(/\s+/);
-    
-    for (let w of words1) {
-        if (w === norm2) return 0.9;
-        if (norm2.includes(w) && w.length >= 3) return 0.7;
+    for (let i = 0; i < Math.min(spoken.length, correct.length); i++) {
+        if (spoken[i] !== correct[i]) {
+            return {
+                index: i,
+                spoken: spoken[i],
+                correct: correct[i],
+                originalCorrect: splitWords(correctText)[i]
+            };
+        }
     }
     
-    return 0;
+    return null;
 }
 
 function isBasmala(text) {
@@ -722,6 +784,75 @@ function isBasmala(text) {
     let count = 0;
     basmalaWords.forEach(w => { if (norm.includes(w)) count++; });
     return count >= 3;
+}
+
+// ✅ نطق كلمة بالصوت
+function speakWord(word, callback) {
+    if (!speechSynthesis || !word) return;
+    
+    speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(word);
+    utterance.lang = 'ar-SA';
+    utterance.rate = 0.7;
+    utterance.pitch = 1.0;
+    
+    if (arabicVoice) {
+        utterance.voice = arabicVoice;
+    }
+    
+    if (callback) {
+        utterance.onend = callback;
+    }
+    
+    speechSynthesis.speak(utterance);
+}
+
+// ✅ عرض الآية مع إمكانية تمييز الكلمات
+function displayAyahWithWords(ayahText) {
+    const words = ayahText.split(/\s+/);
+    currentAyahWords = words;
+    
+    ayahTextBox.classList.add('word-highlight');
+    ayahTextBox.innerHTML = words.map((word, idx) => 
+        `<span class="word" data-index="${idx}">${word}</span>`
+    ).join(' ');
+}
+
+// ✅ إبراز الكلمة الخاطئة
+function highlightErrorWord(index) {
+    const wordElements = ayahTextBox.querySelectorAll('.word');
+    if (wordElements[index]) {
+        wordElements[index].classList.add('error');
+        wordElements[index].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
+// ✅ إزالة تمييز الخطأ
+function clearErrorHighlight() {
+    const wordElements = ayahTextBox.querySelectorAll('.word');
+    wordElements.forEach(el => el.classList.remove('error'));
+}
+
+// ✅ عرض مربع الخطأ
+function showError(wrongWord, correctWord) {
+    errorWrong.textContent = wrongWord;
+    errorCorrect.textContent = correctWord;
+    errorBox.classList.add('active');
+    
+    setTimeout(() => {
+        errorBox.classList.remove('active');
+    }, 5000);
+}
+
+// ✅ تحديث الإحصائيات
+function updateStats() {
+    correctWordsEl.textContent = correctWords;
+    errorWordsEl.textContent = errorWordsCount;
+    
+    const total = correctWords + errorWordsCount;
+    const accuracy = total > 0 ? Math.round((correctWords / total) * 100) : 0;
+    accuracyPercentEl.textContent = accuracy + '%';
 }
 
 function loadSurahList() {
@@ -797,60 +928,6 @@ function stopCurrentAudio() {
         currentAudio.currentTime = 0;
         currentAudio = null;
     }
-}
-
-// ✅ نطق كلمة بالصوت
-function speakWord(word) {
-    if (!speechSynthesis || !word) return;
-    
-    speechSynthesis.cancel();
-    
-    const utterance = new SpeechSynthesisUtterance(word);
-    utterance.lang = 'ar-SA';
-    utterance.rate = 0.8;
-    utterance.pitch = 1.0;
-    
-    if (arabicVoice) {
-        utterance.voice = arabicVoice;
-    }
-    
-    speechSynthesis.speak(utterance);
-}
-
-// ✅ عرض الآية كلمة كلمة
-function displayAyahWithWords(ayahText) {
-    const words = ayahText.split(/\s+/);
-    currentAyahWords = words;
-    currentWordIndex = 0;
-    
-    ayahTextBox.classList.add('word-by-word');
-    ayahTextBox.innerHTML = words.map((word, idx) => 
-        `<span class="word" data-index="${idx}">${word}</span>`
-    ).join(' ');
-    
-    highlightCurrentWord();
-}
-
-// ✅ إبراز الكلمة الحالية
-function highlightCurrentWord() {
-    const wordElements = ayahTextBox.querySelectorAll('.word');
-    wordElements.forEach((el, idx) => {
-        el.classList.remove('current');
-        if (idx === currentWordIndex) {
-            el.classList.add('current');
-            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-    });
-}
-
-// ✅ تحديث الإحصائيات
-function updateStats() {
-    correctWordsEl.textContent = correctWords;
-    errorWordsEl.textContent = errorWords;
-    
-    const total = correctWords + errorWords;
-    const accuracy = total > 0 ? Math.round((correctWords / total) * 100) : 0;
-    accuracyPercentEl.textContent = accuracy + '%';
 }
 
 function playAyahAudio(index, playMode) {
@@ -961,8 +1038,9 @@ function startTilawa() {
     enableMainControls(false);
     recognizedBox.classList.remove("active");
     statsBox.classList.remove("active");
+    errorBox.classList.remove("active");
     listeningDot.classList.remove("active");
-    ayahTextBox.classList.remove('word-by-word');
+    ayahTextBox.classList.remove('word-highlight');
 
     const total = ayahs.length;
     let startIndex = 0;
@@ -1028,8 +1106,8 @@ function initRecognition() {
 
     const rec = new SpeechRecognition();
     rec.lang = "ar-SA";
-    rec.continuous = false;
-    rec.interimResults = false;
+    rec.continuous = true;  // ✅ استماع مستمر
+    rec.interimResults = true;  // ✅ نتائج مؤقتة
     rec.maxAlternatives = 1;
     
     return rec;
@@ -1055,8 +1133,9 @@ function startTasmi() {
     listeningDot.classList.add("active");
     recognizedBox.classList.add("active");
     statsBox.classList.remove("active");
+    errorBox.classList.remove("active");
     recognizedText.textContent = "جارِ الاستماع...";
-    ayahTextBox.classList.remove('word-by-word');
+    ayahTextBox.classList.remove('word-highlight');
     
     modeBadge.textContent = "تسميع (استماع)";
 
@@ -1075,7 +1154,7 @@ function startTasmi() {
     }, 1500);
 }
 
-// ✅ بدء المساعد اللفظي
+// ✅ بدء المساعد اللفظي الجديد
 function startAssistant() {
     if (!hasSpeechSupport()) {
         setStatus("المتصفح لا يدعم Web Speech API", "error");
@@ -1088,21 +1167,23 @@ function startAssistant() {
 
     stopCurrentAudio();
     cancelCountdown();
+    if (speechSynthesis) speechSynthesis.cancel();
 
     mode = "assistant";
     assistantMode = true;
+    isCorrectingError = false;
     enableMainControls(false);
     ayahInput.disabled = true;
     listeningDot.classList.add("active");
     recognizedBox.classList.add("active");
     statsBox.classList.add("active");
-    recognizedText.textContent = "🎯 ابدأ القراءة...";
+    errorBox.classList.remove("active");
+    recognizedText.textContent = "🎯 اقرأ الآية كاملة...";
     
     modeBadge.textContent = "مساعد لفظي";
     
-    // إعادة تعيين الإحصائيات
     correctWords = 0;
-    errorWords = 0;
+    errorWordsCount = 0;
     updateStats();
 
     expectedAyahIndex = 0;
@@ -1111,10 +1192,9 @@ function startAssistant() {
     const firstAyah = ayahs[expectedAyahIndex];
     ayahLabel.textContent = `الآية ${firstAyah.numberInSurah}`;
     
-    // عرض الآية كلمة كلمة
     displayAyahWithWords(firstAyah.text);
     
-    setStatus(`🎯 اقرأ الآية ${firstAyah.numberInSurah}`, "strong");
+    setStatus(`🎯 اقرأ الآية ${firstAyah.numberInSurah} كاملة`, "strong");
     
     startRecognitionAssistant();
 }
@@ -1156,9 +1236,19 @@ function startRecognition() {
         recognition.onresult = (event) => {
             if (mode !== "tasmi" || currentAudio) return;
             
-            const transcript = event.results[0][0].transcript.trim();
-            recognizedText.textContent = "✅ " + transcript;
-            processRecognizedText(transcript);
+            let finalTranscript = "";
+            
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    finalTranscript += event.results[i][0].transcript;
+                }
+            }
+            
+            if (finalTranscript) {
+                const text = finalTranscript.trim();
+                recognizedText.textContent = "✅ " + text;
+                processRecognizedText(text);
+            }
         };
     }
 
@@ -1167,7 +1257,7 @@ function startRecognition() {
     } catch (e) {}
 }
 
-// ✅ استماع مستمر للمساعد اللفظي
+// ✅ استماع للمساعد اللفظي
 function startRecognitionAssistant() {
     if (!recognition) {
         recognition = initRecognition();
@@ -1192,9 +1282,9 @@ function startRecognitionAssistant() {
 
         recognition.onend = () => {
             recognizing = false;
-            if (mode === "assistant") {
+            if (mode === "assistant" && !isCorrectingError) {
                 setTimeout(() => {
-                    if (mode === "assistant" && !recognizing) {
+                    if (mode === "assistant" && !recognizing && !isCorrectingError) {
                         try {
                             recognition.start();
                         } catch (e) {}
@@ -1206,9 +1296,19 @@ function startRecognitionAssistant() {
         recognition.onresult = (event) => {
             if (mode !== "assistant") return;
             
-            const transcript = event.results[0][0].transcript.trim();
-            recognizedText.textContent = "🎤 " + transcript;
-            processAssistantRecognition(transcript);
+            let finalTranscript = "";
+            
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    finalTranscript += event.results[i][0].transcript;
+                }
+            }
+            
+            if (finalTranscript) {
+                const text = finalTranscript.trim();
+                recognizedText.textContent = "🎤 " + text;
+                processAssistantRecognition(text);
+            }
         };
     }
 
@@ -1217,10 +1317,33 @@ function startRecognitionAssistant() {
     } catch (e) {}
 }
 
-// ✅ معالجة النص في وضع المساعد
+// ✅ معالجة النص في المساعد اللفظي
 function processAssistantRecognition(transcript) {
-    if (currentWordIndex >= currentAyahWords.length) {
-        // انتهت الآية - الانتقال للتالية
+    if (isCorrectingError) return;  // لا نعالج أثناء التصحيح
+    
+    if (expectedAyahIndex >= ayahs.length) {
+        setStatus("🎉 أكملت السورة", "done");
+        modeBadge.textContent = "مكتمل";
+        mode = "idle";
+        assistantMode = false;
+        enableMainControls(true);
+        recognizedBox.classList.remove("active");
+        if (recognition) recognition.stop();
+        return;
+    }
+    
+    const currentAyah = ayahs[expectedAyahIndex];
+    const similarity = calculateSimilarity(transcript, currentAyah.text);
+    
+    // ✅ إذا التطابق عالي (الآية صحيحة)
+    if (similarity >= 0.75) {
+        correctWords++;
+        updateStats();
+        clearErrorHighlight();
+        
+        setStatus(`✅ ممتاز! الآية ${currentAyah.numberInSurah} صحيحة`, "strong");
+        
+        // الانتقال للآية التالية
         expectedAyahIndex++;
         
         if (expectedAyahIndex < ayahs.length) {
@@ -1228,59 +1351,56 @@ function processAssistantRecognition(transcript) {
             ayahLabel.textContent = `الآية ${nextAyah.numberInSurah}`;
             displayAyahWithWords(nextAyah.text);
             updateProgress(expectedAyahIndex + 1, ayahs.length);
-            setStatus(`🎯 اقرأ الآية ${nextAyah.numberInSurah}`, "strong");
-        } else {
-            setStatus("🎉 أكملت السورة", "done");
-            modeBadge.textContent = "مكتمل";
-            mode = "idle";
-            assistantMode = false;
-            enableMainControls(true);
-            recognizedBox.classList.remove("active");
-            statsBox.classList.add("active");
-            if (recognition) recognition.stop();
-        }
-        return;
-    }
-    
-    const expectedWord = currentAyahWords[currentWordIndex];
-    const similarity = compareWord(transcript, expectedWord);
-    
-    const wordElement = ayahTextBox.querySelector(`.word[data-index="${currentWordIndex}"]`);
-    
-    if (similarity >= 0.7) {
-        // ✅ كلمة صحيحة
-        correctWords++;
-        updateStats();
-        
-        if (wordElement) {
-            wordElement.classList.remove('current');
-            wordElement.classList.add('correct');
-        }
-        
-        currentWordIndex++;
-        highlightCurrentWord();
-        
-        setStatus(`✅ صحيح! (${Math.round(similarity * 100)}%)`, "strong");
-        
-    } else {
-        // ❌ كلمة خاطئة
-        errorWords++;
-        updateStats();
-        
-        if (wordElement) {
-            wordElement.classList.add('error');
+            
             setTimeout(() => {
-                wordElement.classList.remove('error');
-            }, 2000);
+                if (mode === "assistant") {
+                    setStatus(`🎯 اقرأ الآية ${nextAyah.numberInSurah}`, "strong");
+                }
+            }, 1000);
         }
         
-        setStatus(`❌ خطأ! الكلمة الصحيحة: ${expectedWord}`, "error");
-        recognizedText.textContent = `❌ قلت: ${transcript} | الصحيح: ${expectedWord}`;
+    } else if (similarity >= 0.4) {
+        // ✅ هناك خطأ - نبحث عن الكلمة الخاطئة
+        const error = findErrorWord(transcript, currentAyah.text);
         
-        // ✅ نطق الكلمة الصحيحة
-        speakWord(expectedWord);
-        
-        // لا ننتقل للكلمة التالية - ننتظر المستخدم يصححها
+        if (error) {
+            errorWordsCount++;
+            updateStats();
+            
+            isCorrectingError = true;
+            
+            // إيقاف الاستماع مؤقتاً
+            if (recognition && recognizing) {
+                recognition.stop();
+            }
+            
+            // تمييز الكلمة الخاطئة
+            highlightErrorWord(error.index);
+            
+            // عرض مربع الخطأ
+            showError(error.spoken, error.originalCorrect);
+            
+            setStatus(`❌ خطأ في الكلمة: ${error.originalCorrect}`, "error");
+            
+            // قراءة الكلمة الصحيحة
+            speakWord(error.originalCorrect, () => {
+                // بعد انتهاء القراءة - إعادة تشغيل الاستماع
+                setTimeout(() => {
+                    if (mode === "assistant") {
+                        clearErrorHighlight();
+                        isCorrectingError = false;
+                        setStatus(`🎯 صحح وأكمل الآية ${currentAyah.numberInSurah}`, "strong");
+                        
+                        // إعادة تشغيل الاستماع
+                        if (!recognizing) {
+                            try {
+                                recognition.start();
+                            } catch (e) {}
+                        }
+                    }
+                }, 1000);
+            });
+        }
     }
 }
 
@@ -1482,6 +1602,7 @@ btnAssistant.addEventListener("click", () => {
 btnStop.addEventListener("click", () => {
     mode = "idle";
     assistantMode = false;
+    isCorrectingError = false;
     stopCurrentAudio();
     if (recognition) recognition.stop();
     if (speechSynthesis) speechSynthesis.cancel();
@@ -1492,7 +1613,9 @@ btnStop.addEventListener("click", () => {
     listeningDot.classList.remove("active");
     recognizedBox.classList.remove("active");
     statsBox.classList.remove("active");
-    ayahTextBox.classList.remove('word-by-word');
+    errorBox.classList.remove("active");
+    ayahTextBox.classList.remove('word-highlight');
+    clearErrorHighlight();
     modeBadge.textContent = "غير مفعّل";
 
     setStatus("تم الإيقاف", "normal");
